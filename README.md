@@ -1,8 +1,9 @@
-# Suivi énergétique d'un condenseur évaporatif (NH3 / R717)
+# TUNIFROID · Suivi énergétique d'un condenseur évaporatif
 
-Application Python (Streamlit + Plotly) qui importe les mesures horaires d'une installation
-frigorifique, calcule l'approche thermique du condenseur évaporatif, chiffre la surconsommation
-en dinars et diagnostique la cause de la dégradation (hydraulique, aéraulique, entartrage).
+Application Python (Streamlit + Plotly) réalisée dans le cadre du PPP2 (Université Centrale, Tunis)
+en collaboration avec TUNIFROID. Elle lit les scénarios d'exploitation temps réel d'un condenseur
+évaporatif, chiffre les surcoûts électriques (STEG) et d'eau (SONEDE) et diagnostique la cause
+de la dérive de l'approche thermique par un arbre de décision.
 
 ## Lancer
 
@@ -15,55 +16,52 @@ python -m venv .venv
 .venv\Scripts\python -m pytest -q                 # tests
 ```
 
-Au premier lancement, un site et une machine sont créés. Importer ensuite
-`Simulation_Condenseur_7_Jours_168h.xlsx` depuis la page « Import de données ».
+Au premier lancement, l'application crée le site « TUNIFROID — Atelier de démonstration » et importe
+les scénarios du dossier `donnees/` :
+
+- **CE-01** (500 kW froid) : les 5 fichiers dédiés `Scenarios_Temps_Reel_*.xlsx` (24 mesures horaires) ;
+- **CE-02** (150 kW froid) : le classeur `suivi_energetique_condenseur_6_scenarios.xlsx` (6 feuilles).
+
+## Correspondance avec le cahier des charges
+
+| § | Exigence | Réalisation |
+|---|---|---|
+| 1 | POO, bibliothèque de fluides modifiable (NH3, CO2, R404a, R134a), multi-sites | `condenseur/modeles.py`, `fluides.py` ; pages « Bibliothèque de fluides » et « Sites et machines » |
+| 1 | 6 scénarios Excel | import multi-feuilles ; un scénario par fichier ou par feuille |
+| 2 | Tarifs STEG 0,280 DT/kWh et SONEDE 1,250 DT/m³, pression et débits nominaux, VFD, seuils 3,0 / 4,5 / 6,0 / 8,5 °C | `parametres.py`, page « Paramètres de référence » (par machine) |
+| 3 | Colonnes A à P | `tags.py`, `import_donnees.py` |
+| 4 | Normalisation selon Q0 | P_ref = P_comp_ref × Q0 / Q0_ref |
+| 4 | Double affichage financier | STEG = max(0, P_comp − P_ref) × tarif ; SONEDE = max(0, Q_purge − Q_purge_nom) / 1000 × tarif |
+| 4.1 | Arbre de décision (6 branches) | `diagnostic.py`, page « Diagnostic » |
+| 5 | Graphique unique ΔT_app en fonction du temps | tableau de bord, avec superposition d'autres scénarios pour comparer les cinétiques |
+
+## Choix de modélisation
+
+- **Tc** : équation d'Antoine du fluide de la machine (NH3 : coefficients NIST ; autres fluides :
+  ajustement sur les tables de saturation), HP relative + 1,01325 bar.
+- **Écart toléré** : ±10 % autour des valeurs nominales de pression et de débits avant de signaler
+  une chute, un débit faible ou une purge excessive.
+- **Dérive brutale ou lente** : une chute de P_pulv coupe l'arrosage et fait monter ΔT_app
+  brutalement ; à P_pulv normale la dérive est lente. La branche « entartrage » exige
+  ΔT_app ≥ seuil d'alerte légère.
+- Les colonnes O et P des fichiers sont conservées ; l'application recalcule les surcoûts avec les
+  tarifs saisis. Sur les fichiers fournis, les deux calculs concordent.
 
 ## Organisation
 
 ```
 app.py                     point d'entrée Streamlit (navigation)
 condenseur/                moteur, sans dépendance à l'interface
-  parametres.py            paramètres de référence d'une machine (§2 du cahier des charges)
-  tags.py                  dictionnaire des tags GTC (§4)
-  thermo.py                Antoine inverse R717, bulbe humide de Stull (§5)
-  moteur.py                calcul horaire : ΔTapp, ηcond, COP, surconsommation, coûts, alertes
-  diagnostic.py            arbre de décision (hydraulique / aéraulique / entartrage)
-  import_donnees.py        import .xlsx / .csv avec contrôles (§3)
-  modeles.py               classes Site et Machine (POO, multi-machines)
+  fluides.py               bibliothèque de fluides (Antoine)
+  parametres.py            paramètres de référence (§2)
+  tags.py                  dictionnaire des données (§3)
+  moteur.py                normalisation Q0, surcoûts STEG / SONEDE, niveaux, diagnostic
+  diagnostic.py            arbre de décision (§4.1)
+  import_donnees.py        import .xlsx (multi-feuilles) / .csv
+  modeles.py               classes Site, Machine, Scenario
   stockage.py              persistance SQLite (donnees/condenseur.db)
-  sources/                 mode industriel : interface SourceDonnees, Modbus TCP,
-                           BACnet et OPC UA (mode industriel futur)
-vues/                      pages Streamlit (thème, cartes, jauges, synoptique animé)
+  demo.py                  chargement initial des scénarios fournis
+vues/                      pages Streamlit aux couleurs de TUNIFROID
+donnees/                   scénarios Excel
 tests/                     tests pytest
 ```
-
-## Choix de modélisation
-
-- **Tc** : équation d'Antoine du NH3 (NIST : A = 4,86886 ; B = 1113,928 ; C = −10,409 ;
-  P en bar absolu, T en K), inversée. HP relative + 1,01325 bar.
-- **Tbh** : formule de Stull (2011).
-- **Étalonnage** : avec la vraie loi d'Antoine, le fichier de simulation fournit ΔTapp ≈ 8,4 °C
-  en phase propre, au lieu de 3,0 °C : il y a un décalage constant d'environ 5,46 °C (la pente
-  HP/Tc est pourtant correcte). L'application retire ce décalage, calculé sur la période de
-  référence H1 à H48 (phase nominale). On obtient alors ΔTapp ≈ 3,0 °C en phase 1,
-  de 3 à 5,1 °C en phase 2 et de 5,4 à 6,75 °C en phase 3. La puissance compresseur mesurée
-  (+10,5 %) concorde avec la règle des 3 %/°C (+11,3 %).
-- **ηcond** = ΔTnom / ΔTapp, plafonné à 100 %. **COP** = Q0 / (P_comp + P_aux).
-- **Surconsommation** : +3 % de puissance compresseur par °C d'approche au-dessus de ΔTnom
-  (constante du modèle). P_ref = P_comp / (1 + s), surconsommation = P_comp − P_ref,
-  coût horaire = surconsommation × 1 h × tarif, cumulé en dinars.
-- **Alertes** (§3) : légère à partir de 4,5 °C, grave à partir de 6,0 °C ; l'alerte grave déclenche
-  l'alerte de maintenance préventive. Seuls les paramètres du §2 sont modifiables dans l'interface. Sur le fichier fourni, l'alerte légère arrive
-  à H85 et l'alerte grave à H131 (encrassement progressif).
-
-## Interface
-
-- **Santé et surcoûts** : indicateurs globaux (ΔTapp, ηcond, COP, surconsommation, coût horaire),
-  jauges, synoptique animé, surcoût cumulé en DT, évolution sur les 3 phases.
-- **Diagnostic ciblé** : cause (hydraulique, aéraulique, entartrage), grandeurs croisées par l'arbre.
-- **Import de données** (§3, §4), **Paramètres de référence** (§2), **Sites et machines** (§1).
-
-## Mode industriel (futur)
-
-Conformément au §1, l'architecture est prête pour une connexion temps réel : `condenseur/sources/`
-définit l'interface `SourceDonnees` et les classes Modbus TCP, BACnet/IP et OPC UA à compléter.

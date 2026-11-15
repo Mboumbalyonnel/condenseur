@@ -1,5 +1,6 @@
 .venv/
 __pycache__/
 .pytest_cache/
-donnees/
+donnees/*.db
 *.pyc
+Simulation_Condenseur_7_Jours_168h.xlsx

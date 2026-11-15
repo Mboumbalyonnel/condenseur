@@ -1,18 +1,16 @@
-"""Objets métier : un site industriel regroupe des machines (condenseurs) pilotées
-indépendamment, chacune avec ses paramètres de référence et sa source de données."""
+"""Objets métier (conception orientée objet, §1) : un site regroupe des machines (condenseurs
+évaporatifs) ; chaque machine a son fluide, ses paramètres de référence et ses scénarios
+d'exploitation importés."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from .fluides import Fluide
 from .moteur import Resultat, analyser
 from .parametres import Parametres
-
-if TYPE_CHECKING:
-    from .sources.base import SourceDonnees
 
 
 @dataclass
@@ -28,16 +26,19 @@ class Machine:
     site_id: int
     nom: str
     description: str = ""
+    fluide: str = "NH3"
     parametres: Parametres = field(default_factory=Parametres)
-    source_type: str = "fichier"          # fichier | modbus_tcp | bacnet | opc_ua
-    source_config: dict = field(default_factory=dict)
 
-    def analyser(self, mesures: pd.DataFrame) -> Resultat:
+    def analyser(self, mesures: pd.DataFrame, fluide: Fluide) -> Resultat:
         """Applique le moteur de calcul avec les paramètres propres à cette machine."""
-        return analyser(mesures, self.parametres)
+        return analyser(mesures, self.parametres, fluide)
 
-    def source(self) -> "SourceDonnees":
-        """Instancie la source de données temps réel configurée pour cette machine."""
-        from .sources import creer_source
 
-        return creer_source(self.source_type, self.source_config)
+@dataclass
+class Scenario:
+    """Un fichier (ou une feuille) Excel de scénario d'exploitation temps réel."""
+    id: int
+    machine_id: int
+    nom: str
+    fichier: str = ""
+    nb_mesures: int = 0

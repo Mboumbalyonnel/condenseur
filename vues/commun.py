@@ -1,103 +1,69 @@
-"""Éléments partagés par les pages : base de données, barre latérale, analyse, phases."""
+"""Éléments partagés par les pages : base de données, barre latérale, analyse du scénario choisi."""
 
 from __future__ import annotations
 
-import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
-from condenseur.diagnostic import ALERTE_GRAVE, ALERTE_LEGERE, NORMAL
-from condenseur.modeles import Machine
+from condenseur.demo import initialiser
+from condenseur.diagnostic import ALERTE_AERAULIQUE, ALERTE_GRAVE, ALERTE_LEGERE, NOMINAL
+from condenseur.fluides import FLUIDES_DEFAUT
+from condenseur.modeles import Machine, Scenario
 from condenseur.moteur import Resultat
 from condenseur.stockage import Depot
 from vues import composants as ui
-from vues.icones import icone
-from vues.theme import appliquer, couleurs
+from vues.theme import LOGO, appliquer
 
-ETAT_NIVEAU = {NORMAL: "ok", ALERTE_LEGERE: "attention", ALERTE_GRAVE: "critique"}
-ETAT_PHASE = {1: "ok", 2: "attention", 3: "critique"}
+ETAT_NIVEAU = {NOMINAL: "ok", ALERTE_LEGERE: "attention", ALERTE_GRAVE: "critique", ALERTE_AERAULIQUE: "aeraulique"}
 
 
 @st.cache_resource
 def depot() -> Depot:
     d = Depot()
-    if not d.sites():
-        site = d.creer_site("Site principal", "")
-        d.creer_machine(site.id, "Condenseur évaporatif 1", "Condenseur évaporatif NH3")
+    initialiser(d)
     return d
 
 
-def nombre(valeur: float, decimales: int = 2, unite: str = "") -> str:
-    return f"{ui.fmt(valeur, decimales, '-')} {unite}".strip()
-
-
-def barre_laterale() -> Machine | None:
-    """Marque, thème, choix site / machine. Appelée une fois par app.py avant la page."""
-    ss = st.session_state
-    ss.setdefault("theme", "sombre")
-    appliquer(ss["theme"])
-    d = depot()
-    with st.sidebar:
-        ui.html(f'<div class="marque">{icone("thermometre", 24)}<span>Condenseur évaporatif NH3</span></div>')
-        st.write("")
-        sites = d.sites()
-        if not sites:
-            st.info("Aucun site. Créez-en un dans « Sites et machines ».")
-            machine = None
-        else:
-            ids_sites = [s.id for s in sites]
-            if ss.get("site_id") not in ids_sites:
-                ss["site_id"] = ids_sites[0]
-            st.selectbox("Site", ids_sites, format_func={s.id: s.nom for s in sites}.get, key="site_id")
-            machines = d.machines(ss["site_id"])
-            if not machines:
-                st.info("Aucune machine sur ce site.")
-                machine = None
-            else:
-                ids = [m.id for m in machines]
-                if ss.get("machine_id") not in ids:
-                    ss["machine_id"] = ids[0]
-                st.selectbox("Machine", ids, format_func={m.id: m.nom for m in machines}.get, key="machine_id")
-                machine = d.machine(ss["machine_id"])
-        st.radio("Thème", ["sombre", "clair"], horizontal=True, key="theme")
-        st.divider()
-    return machine
-
-
-def analyse(machine: Machine) -> Resultat | None:
-    mesures = depot().mesures(machine.id)
-    if mesures.empty:
+def _choisir(libelle: str, objets: list, cle: str, format_nom) -> object | None:
+    ids = [o.id for o in objets]
+    if not ids:
         return None
-    return machine.analyser(mesures)
+    if st.session_state.get(cle) not in ids:
+        st.session_state[cle] = ids[0]
+    noms = {o.id: format_nom(o) for o in objets}
+    st.selectbox(libelle, ids, format_func=noms.get, key=cle)
+    return next(o for o in objets if o.id == st.session_state[cle])
 
 
-def sans_donnees(machine: Machine) -> None:
-    ui.alerte("neutre", "Aucune mesure pour cette machine",
-              f"Importez le fichier de simulation horaire de « {machine.nom} » depuis la page Import de données.",
-              "upload")
-    st.page_link("vues/import_fichier.py", label="Aller à l'import de données")
+def barre_laterale() -> tuple[Machine | None, Scenario | None]:
+    """Logo, choix du site, de la machine et du scénario. Appelée une fois par app.py."""
+    appliquer()
+    d = depot()
+    st.logo(str(LOGO), size="large")
+    with st.sidebar:
+        ui.html('<div class="marque-sous">Suivi énergétique du condenseur évaporatif</div>')
+        site = _choisir("Site", d.sites(), "site_id", lambda s: s.nom)
+        machine = _choisir("Machine", d.machines(site.id), "machine_id", lambda m: m.nom) if site else None
+        scenario = (_choisir("Scénario d'exploitation", d.scenarios(machine.id), "scenario_id", lambda s: s.nom)
+                    if machine else None)
+        st.divider()
+    return machine, scenario
 
 
-def etat_pression(p_pulv: float, p) -> str:
-    ecart = abs(p_pulv - p.p_pulv_consigne_bar) / p.p_pulv_consigne_bar * 100
-    if ecart > p.tolerance_pression_pct:
-        return "critique"
-    if ecart > p.tolerance_pression_pct / 2:
-        return "attention"
-    return "ok"
+def analyse(machine: Machine, scenario: Scenario) -> Resultat:
+    d = depot()
+    fluide = d.fluide(machine.fluide) or FLUIDES_DEFAUT[0]
+    return machine.analyser(d.mesures(scenario.id), fluide)
 
 
-def bandes_phases(fig: go.Figure, df: pd.DataFrame, rangee: int | None = None) -> None:
-    """Colore le fond de chaque phase (§3) et l'étiquette en haut du graphique."""
-    c = couleurs()
-    teintes = {1: c["ok"], 2: c["attention"], 3: c["critique"]}
-    pas = pd.Timedelta(hours=1)
-    for phase, g in df.groupby("PHASE"):
-        x0 = g["TIMESTAMP"].iloc[0] - pas / 2
-        x1 = g["TIMESTAMP"].iloc[-1] + pas / 2
-        options = dict(x0=x0, x1=x1, fillcolor=teintes[phase], opacity=0.07, line_width=0, layer="below")
-        if rangee is None:
-            fig.add_vrect(**options, annotation_text=f"Phase {phase}", annotation_position="top left",
-                          annotation_font=dict(size=11, color=c["texte2"]))
-        else:
-            fig.add_vrect(**options, row=rangee, col=1)
+def contexte() -> tuple[Machine, Scenario] | None:
+    """Machine et scénario choisis ; affiche un message et renvoie None s'il en manque un."""
+    machine, scenario = st.session_state.get("machine"), st.session_state.get("scenario")
+    if machine is None:
+        ui.alerte("neutre", "Aucune machine", "Créez un site et une machine dans « Sites et machines ».", "usine")
+        return None
+    if scenario is None:
+        ui.alerte("neutre", "Aucun scénario pour cette machine",
+                  f"Importez un fichier Excel de scénario pour « {machine.nom} ».", "upload")
+        st.page_link("vues/import_fichier.py", label="Aller à l'import des scénarios")
+        return None
+    return machine, scenario

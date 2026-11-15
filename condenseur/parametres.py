@@ -1,9 +1,4 @@
-"""Paramètres de référence d'une machine (cahier des charges, §2).
-
-Seuls les paramètres du tableau §2 sont modifiables par l'exploitant. Les autres valeurs
-sont des constantes du modèle tirées du cahier des charges (§3) ou des choix de
-modélisation validés (règle des 3 %/°C, étalonnage sur la phase nominale).
-"""
+"""Paramètres de référence d'une machine, saisis dans l'interface (cahier des charges, §2)."""
 
 from __future__ import annotations
 
@@ -12,56 +7,63 @@ from dataclasses import asdict, dataclass, fields
 
 @dataclass
 class Parametres:
-    # --- Paramètres du cahier des charges (§2), modifiables ---
-    tarif_kwh_dt: float = 0.340          # Tarif STEG HT/MT (DT/kWh)
-    approche_nominale_c: float = 3.0     # ΔTnom constructeur, condenseur propre (°C)
-    p_pompe_kw: float = 4.5              # Puissance nominale pompe de pulvérisation (kW)
-    p_pulv_consigne_bar: float = 1.85    # Pression de consigne de la rampe d'eau (bar)
-    vfd_min_hz: float = 30.0             # Fréquence mini du variateur ventilateur (Hz)
-    vfd_max_hz: float = 50.0             # Fréquence maxi du variateur ventilateur (Hz)
+    # Tarifs énergie et eau
+    tarif_elec_dt_kwh: float = 0.280        # STEG
+    tarif_eau_dt_m3: float = 1.250          # SONEDE
+    # Caractéristiques hydrauliques et aérauliques
+    p_pulv_nom_bar: float = 1.85            # pression nominale de pulvérisation
+    q_pulv_nom_m3h: float = 45.0            # débit nominal de pulvérisation Q_pulv_nom
+    q_purge_nom_lh: float = 120.0           # débit nominal de purge Q_purge_nom
+    vfd_min_hz: float = 20.0                # fréquences du variateur ventilateur
+    vfd_max_hz: float = 50.0
+    # Seuils d'alerte sur l'approche thermique ΔT_app
+    dt_app_nominal_c: float = 3.0
+    seuil_legere_c: float = 4.5
+    seuil_grave_c: float = 6.0
+    seuil_aeraulique_c: float = 8.5
+    # Point de référence pour la normalisation selon Q0 (§4)
+    p_comp_ref_kw: float = 119.05           # puissance compresseur de l'installation propre...
+    q0_ref_kw: float = 500.0                # ...à cette puissance frigorifique
 
-    # --- Constantes du modèle (non modifiables dans l'interface) ---
-    seuil_alerte_legere_c = 4.5          # §3 : alerte légère, approche de 4,5 à 6,0 °C
-    seuil_alerte_grave_c = 6.0           # §3 : alerte grave, approche >= 6,0 °C
-    surconso_pct_par_c = 3.0             # Surconsommation compresseur par °C d'approche en excès (%/°C)
-    tolerance_pression_pct = 15.0        # Écart toléré sur la pression de pulvérisation (%)
-    marge_vfd_hz = 1.0                   # Ventilateur « à pleine vitesse » si VFD >= max - marge (Hz)
-    pression_atm_bar = 1.01325           # Pression relative -> absolue
-    reference_debut_h = 1                # Étalonnage sur la phase 1 (cas nominal, §3) : H1 à H48
-    reference_fin_h = 48
-    phase2_debut_h = 49                  # §3 : phase 2 de H49 à H120
-    phase3_debut_h = 121                 # §3 : phase 3 de H121 à H168
+    # Écart toléré autour des valeurs nominales (pression, débits) avant de signaler
+    # une chute ou un excès dans l'arbre de décision.
+    tolerance_pct = 10.0
 
     def vers_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
-    def depuis_dict(cls, donnees: dict | None) -> "Parametres":
-        """Construit des paramètres en ignorant les clés inconnues."""
-        if not donnees:
-            return cls()
-        return cls(**{f.name: float(donnees[f.name]) for f in fields(cls) if donnees.get(f.name) is not None})
+    def depuis_dict(cls, valeurs: dict) -> "Parametres":
+        noms = {f.name for f in fields(cls)}
+        return cls(**{k: float(v) for k, v in valeurs.items() if k in noms})
 
     def verifier(self) -> list[str]:
-        """Renvoie la liste des incohérences (vide si tout va bien)."""
         erreurs = []
-        if self.tarif_kwh_dt < 0:
-            erreurs.append("Le tarif de l'électricité doit être positif.")
-        if not 0 < self.approche_nominale_c < self.seuil_alerte_legere_c:
-            erreurs.append(f"L'approche nominale doit être comprise entre 0 et {self.seuil_alerte_legere_c} °C.")
+        for f in fields(self):
+            if getattr(self, f.name) < 0:
+                erreurs.append(f"{LIBELLES[f.name][0]} : valeur négative.")
         if self.vfd_min_hz >= self.vfd_max_hz:
-            erreurs.append("La fréquence mini du variateur doit être inférieure à la fréquence maxi.")
-        if self.p_pulv_consigne_bar <= 0 or self.p_pompe_kw <= 0:
-            erreurs.append("La puissance et la pression de la pompe doivent être positives.")
+            erreurs.append("La fréquence minimale du variateur doit être inférieure à la fréquence maximale.")
+        if not self.dt_app_nominal_c < self.seuil_legere_c < self.seuil_grave_c < self.seuil_aeraulique_c:
+            erreurs.append("Les seuils doivent être croissants : nominal < légère < grave < aéraulique.")
+        if self.q0_ref_kw <= 0 or self.p_comp_ref_kw <= 0:
+            erreurs.append("Le point de référence de normalisation doit être strictement positif.")
         return erreurs
 
 
-# Libellés du formulaire de configuration (tableau §2) : (libellé, unité, pas, décimales)
+# nom -> (libellé, unité, pas de saisie, décimales)
 LIBELLES = {
-    "tarif_kwh_dt": ("Tarif électricité (STEG)", "DT/kWh", 0.001, 3),
-    "approche_nominale_c": ("Approche nominale ΔTnom", "°C", 0.1, 1),
-    "p_pompe_kw": ("Pompe de pulvérisation : puissance", "kW", 0.1, 1),
-    "p_pulv_consigne_bar": ("Pompe de pulvérisation : pression de consigne", "bar", 0.01, 2),
-    "vfd_min_hz": ("Variateur ventilateur : fréquence mini", "Hz", 1.0, 0),
-    "vfd_max_hz": ("Variateur ventilateur : fréquence maxi", "Hz", 1.0, 0),
+    "tarif_elec_dt_kwh": ("Tarif électricité STEG", "DT/kWh", 0.001, 3),
+    "tarif_eau_dt_m3": ("Tarif eau industrielle SONEDE", "DT/m³", 0.001, 3),
+    "p_pulv_nom_bar": ("Pression nominale de pulvérisation", "bar", 0.05, 2),
+    "q_pulv_nom_m3h": ("Débit nominal de pulvérisation Q_pulv_nom", "m³/h", 0.5, 1),
+    "q_purge_nom_lh": ("Débit nominal de purge Q_purge_nom", "L/h", 1.0, 0),
+    "vfd_min_hz": ("Fréquence VFD ventilateur minimale", "Hz", 1.0, 0),
+    "vfd_max_hz": ("Fréquence VFD ventilateur maximale", "Hz", 1.0, 0),
+    "dt_app_nominal_c": ("ΔT_app nominal", "°C", 0.1, 1),
+    "seuil_legere_c": ("Seuil d'alerte légère", "°C", 0.1, 1),
+    "seuil_grave_c": ("Seuil d'alerte grave", "°C", 0.1, 1),
+    "seuil_aeraulique_c": ("Seuil d'alerte aéraulique", "°C", 0.1, 1),
+    "p_comp_ref_kw": ("Puissance compresseur de référence", "kW", 0.5, 2),
+    "q0_ref_kw": ("Puissance frigorifique de référence Q0", "kW", 1.0, 0),
 }

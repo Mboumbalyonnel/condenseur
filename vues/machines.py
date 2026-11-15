@@ -7,11 +7,12 @@ import sqlite3
 import streamlit as st
 
 from vues import composants as ui
-from vues.commun import depot, nombre
+from vues.commun import depot
 
 d = depot()
 ui.titre_page("usine", "Sites et machines",
-              "Architecture modulaire : chaque machine a ses paramètres, ses mesures et sa source de données.")
+              "Intégration multi-sites : chaque machine a son fluide, ses paramètres de référence et ses scénarios.")
+fluides = [f.nom for f in d.fluides()]
 
 # ---------------------------------------------------------------- Vue d'ensemble
 for site in d.sites():
@@ -19,7 +20,8 @@ for site in d.sites():
         st.markdown(f"**{site.nom}**" + (f" — {site.localisation}" if site.localisation else ""))
         machines = d.machines(site.id)
         if machines:
-            st.dataframe([{"Machine": m.nom, "Description": m.description, "Mesures": nombre(d.nombre_mesures(m.id), 0)} for m in machines],
+            st.dataframe([{"Machine": m.nom, "Description": m.description, "Fluide": m.fluide,
+                           "Scénarios": len(d.scenarios(m.id))} for m in machines],
                          hide_index=True, width="stretch")
         else:
             st.caption("Aucune machine.")
@@ -50,12 +52,13 @@ with onglet_machine:
             site_id = st.selectbox("Site", [s.id for s in sites], format_func={s.id: s.nom for s in sites}.get)
             nom = st.text_input("Nom de la machine", placeholder="Condenseur évaporatif 2")
             description = st.text_input("Description")
+            fluide = st.selectbox("Fluide frigorigène", fluides)
             if st.form_submit_button("Créer la machine", type="primary"):
                 if not nom.strip():
                     st.error("Le nom est obligatoire.")
                 else:
                     try:
-                        m = d.creer_machine(site_id, nom, description)
+                        m = d.creer_machine(site_id, nom, description, fluide)
                         st.session_state["site_id"], st.session_state["machine_id"] = site_id, m.id
                         st.rerun()
                     except sqlite3.IntegrityError:
@@ -73,6 +76,8 @@ with onglet_modifier:
         with st.form(f"modifier_machine_{mid}"):
             m.nom = st.text_input("Nom", m.nom)
             m.description = st.text_input("Description", m.description)
+            m.fluide = st.selectbox("Fluide frigorigène", fluides,
+                                    index=fluides.index(m.fluide) if m.fluide in fluides else 0)
             m.site_id = st.selectbox("Site", list(noms_sites), index=list(noms_sites).index(m.site_id),
                                      format_func=noms_sites.get)
             if st.form_submit_button("Enregistrer"):
@@ -81,7 +86,7 @@ with onglet_modifier:
                     st.rerun()
                 except sqlite3.IntegrityError:
                     st.error("Une machine porte déjà ce nom sur ce site.")
-        confirmer = st.checkbox(f"Je confirme la suppression de « {m.nom} » et de ses mesures", key=f"conf_m_{mid}")
+        confirmer = st.checkbox(f"Je confirme la suppression de « {m.nom} » et de ses scénarios", key=f"conf_m_{mid}")
         if st.button("Supprimer la machine", disabled=not confirmer, icon=":material/delete:"):
             d.supprimer_machine(mid)
             st.rerun()
@@ -99,7 +104,7 @@ with onglet_modifier:
                     st.rerun()
                 except sqlite3.IntegrityError:
                     st.error("Un site porte déjà ce nom.")
-        confirmer = st.checkbox(f"Je confirme la suppression du site « {site.nom} », de ses machines et de leurs mesures",
+        confirmer = st.checkbox(f"Je confirme la suppression du site « {site.nom} », de ses machines et de leurs scénarios",
                                 key=f"conf_s_{sid}")
         if st.button("Supprimer le site", disabled=not confirmer, icon=":material/delete:"):
             d.supprimer_site(sid)
